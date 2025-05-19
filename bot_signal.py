@@ -18,6 +18,9 @@ password = 'PamulangMeruyung2!'
 bot = telebot.TeleBot(API_TOKEN)
 tv = TvDatafeed(username, password)
 
+PAIRS = ['XAUUSD', 'GBPJPY', 'EURUSD']
+
+# ================= Helper Functions ===================
 def send_signal(message, df):
     print("Kirim sinyal:", message)
     df.index = pd.to_datetime(df['datetime'])
@@ -28,17 +31,87 @@ def send_signal(message, df):
     with open(chart_file, 'rb') as photo:
         bot.send_photo(CHAT_ID, photo, caption=message)
 
-def get_trend_h1():
-    df_h1 = tv.get_hist(symbol='XAUUSD', exchange='OANDA', interval=Interval.in_1_hour, n_bars=50)
+def get_trend_h1(symbol):
+    df_h1 = tv.get_hist(symbol=symbol, exchange='OANDA', interval=Interval.in_1_hour, n_bars=100)
     if df_h1 is None or df_h1.empty:
         return None
     df_h1['ema50'] = df_h1['close'].ewm(span=50).mean()
     trend = 'bullish' if df_h1['close'].iloc[-1] > df_h1['ema50'].iloc[-1] else 'bearish'
     return trend
 
+def detect_liquidity_sweep(df):
+    high_sweep = df['high'].iloc[-1] > df['high'].iloc[-2] and df['close'].iloc[-1] < df['open'].iloc[-1]
+    low_sweep = df['low'].iloc[-1] < df['low'].iloc[-2] and df['close'].iloc[-1] > df['open'].iloc[-1]
+    return 'bearish' if high_sweep else 'bullish' if low_sweep else None
+
+def detect_fvg(df):
+    try:
+        fvg_up = df['low'].iloc[-3] > df['high'].iloc[-1]
+        fvg_down = df['high'].iloc[-3] < df['low'].iloc[-1]
+        if fvg_up:
+            return (True, df['low'].iloc[-3])
+        elif fvg_down:
+            return (True, df['high'].iloc[-3])
+        else:
+            return (False, None)
+    except:
+        return (False, None)
+
+def estimate_volatility(df):
+    return df['high'].rolling(10).max().iloc[-1] - df['low'].rolling(10).min().iloc[-1]
+
+def check_fundamentals(api_key):
+    try:
+        now = datetime.now(timezone.utc)
+        today = now.strftime('%Y-%m-%d')
+        url = f'https://financialmodelingprep.com/api/v3/economic_calendar?from={today}&to={today}&apikey={api_key}'
+        res = requests.get(url)
+        data = res.json()
+        if not isinstance(data, list):
+            print("⚠️ Unexpected response from fundamental API:", data)
+            return True
+        for event in data:
+            if event.get('country') != 'US':
+                continue
+            if event.get('importance') == 'High':
+                event_time_str = f"{event.get('date', today)} {event.get('time', '00:00:00')}"
+                try:
+                    event_time = datetime.strptime(event_time_str, '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
+                except:
+                    continue
+                if 0 <= (event_time - now).total_seconds() <= 3600:
+                    print(f"⚠️ Upcoming High Impact US News: {event.get('event')} at {event.get('time')}")
+                    return False
+        return True
+    except Exception as e:
+        print("Fundamental check error:", e)
+        return True
+
+def is_trading_hours():
+    now = datetime.now().time()
+    return now.hour >= 8 and now.hour <= 22
+
+def detect_market_structure(df):
+    last_highs = df['high'].rolling(3).max()
+    last_lows = df['low'].rolling(3).min()
+    higher_high = last_highs.iloc[-1] > last_highs.iloc[-2]
+    higher_low = last_lows.iloc[-1] > last_lows.iloc[-2]
+    lower_high = last_highs.iloc[-1] < last_highs.iloc[-2]
+    lower_low = last_lows.iloc[-1] < last_lows.iloc[-2]
+    if higher_high and higher_low:
+        return 'bullish'
+    elif lower_high and lower_low:
+        return 'bearish'
+    else:
+        return 'ranging'
+
+# Fungsi tambahan: deteksi bullish / bearish engulfing candle terakhir
 def is_engulfing(df):
-    last = df.iloc[-1]
+    if len(df) < 2:
+        return None
     prev = df.iloc[-2]
+    last = df.iloc[-1]
+
     bullish = (
         prev['close'] < prev['open'] and
         last['close'] > last['open'] and
@@ -53,129 +126,74 @@ def is_engulfing(df):
     )
     return 'bullish' if bullish else 'bearish' if bearish else None
 
-def detect_order_block(df, bullish=True):
-    try:
-        if bullish:
-            return (
-                df['close'].iloc[-4] < df['open'].iloc[-4] and
-                df['close'].iloc[-3] > df['open'].iloc[-3] and
-                df['close'].iloc[-2] > df['open'].iloc[-2]
-            )
-        else:
-            return (
-                df['close'].iloc[-4] > df['open'].iloc[-4] and
-                df['close'].iloc[-3] < df['open'].iloc[-3] and
-                df['close'].iloc[-2] < df['open'].iloc[-2]
-            )
-    except:
-        return False
-
-def calculate_rsi(df, period=14):
-    delta = df['close'].diff()
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta > 0, 0)
-    avg_gain = gain.rolling(window=period).mean()
-    avg_loss = loss.rolling(window=period).mean()
-    rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi.iloc[-1]
-
-def calculate_macd(df):
-    exp1 = df['close'].ewm(span=12, adjust=False).mean()
-    exp2 = df['close'].ewm(span=26, adjust=False).mean()
-    macd_line = exp1 - exp2
-    signal_line = macd_line.ewm(span=9, adjust=False).mean()
-    return macd_line.iloc[-1], signal_line.iloc[-1]
-
-def check_fundamentals(api_key):
-    try:
-        now = datetime.now(timezone.utc)
-        today = now.strftime('%Y-%m-%d')
-        url = f'https://financialmodelingprep.com/api/v3/economic_calendar?from={today}&to={today}&apikey={api_key}'
-        res = requests.get(url)
-        data = res.json()
-        for event in data:
-            if event.get('importance') == 'High':
-                event_time_str = f"{event.get('date', today)} {event.get('time', '00:00:00')}"
-                try:
-                    event_time = datetime.strptime(event_time_str, '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
-                except:
-                    continue
-                if 0 <= (event_time - now).total_seconds() <= 3600:
-                    print(f"⚠️ Upcoming High Impact News: {event.get('event')} at {event.get('time')}")
-                    return False
-        return True
-    except Exception as e:
-        print("Fundamental check error:", e)
-        return True
-
+# ================= Main Loop ===================
 while True:
     try:
-        trend_h1 = get_trend_h1()
-        if trend_h1 is None:
-            print("❌ Tidak bisa menentukan trend H1")
+        if not is_trading_hours():
+            print("⏸ Di luar jam trading aktif (08:00–22:00 WIB)")
             time.sleep(60)
             continue
 
-        df = tv.get_hist(symbol='XAUUSD', exchange='OANDA', interval=Interval.in_5_minute, n_bars=50)
-        if df is None or df.empty:
-            print("❌ Data kosong dari TradingView")
-            time.sleep(60)
-            continue
+        for symbol in PAIRS:
+            trend_h1 = get_trend_h1(symbol)
+            if trend_h1 is None:
+                print(f"❌ Tidak bisa menentukan trend H1 untuk {symbol}")
+                continue
 
-        pattern = is_engulfing(df)
-        if not pattern:
-            time.sleep(60)
-            continue
+            df = tv.get_hist(symbol=symbol, exchange='OANDA', interval=Interval.in_5_minute, n_bars=50)
+            if df is None or df.empty:
+                print(f"❌ Data kosong dari TradingView untuk {symbol}")
+                continue
 
-        if pattern != trend_h1:
-            print(f"📉 Sinyal {pattern} tidak searah dengan trend H1 ({trend_h1})")
-            time.sleep(60)
-            continue
+            sweep = detect_liquidity_sweep(df)
+            if sweep != trend_h1:
+                continue
 
-        if not check_fundamentals(FMP_API_KEY):
-            print("⏸ Fundamental tidak mendukung — sinyal dibatalkan.")
-            time.sleep(60)
-            continue
+            market_structure = detect_market_structure(df)
+            if market_structure != trend_h1:
+                continue
 
-        if pattern == 'bullish' and not detect_order_block(df, bullish=True):
-            print("❌ Tidak ada bullish order block")
-            time.sleep(60)
-            continue
-        elif pattern == 'bearish' and not detect_order_block(df, bullish=False):
-            print("❌ Tidak ada bearish order block")
-            time.sleep(60)
-            continue
+            # Cek pola engulfing candle terakhir
+            engulfing = is_engulfing(df)
+            if engulfing != sweep:
+                continue
 
-        rsi = calculate_rsi(df)
-        macd, signal = calculate_macd(df)
-        if pattern == 'bullish' and (rsi < 50 or macd < signal):
-            print("📉 RSI atau MACD tidak mendukung bullish")
-            time.sleep(60)
-            continue
-        elif pattern == 'bearish' and (rsi > 50 or macd > signal):
-            print("📈 RSI atau MACD tidak mendukung bearish")
-            time.sleep(60)
-            continue
+            fvg_ok, entry = detect_fvg(df)
+            if not fvg_ok or entry is None:
+                continue
 
-        entry = df['close'].iloc[-1]
-        sl = entry - 3 if pattern == 'bullish' else entry + 3
-        tp = entry + 5 if pattern == 'bullish' else entry - 5
+            # Pastikan harga menyentuh FVG sebelum kirim sinyal
+            if sweep == 'bullish' and not (df['low'].iloc[-1] <= entry <= df['high'].iloc[-1]):
+                continue
+            if sweep == 'bearish' and not (df['low'].iloc[-1] <= entry <= df['high'].iloc[-1]):
+                continue
 
-        msg = f"""
-{'🟢 BUY' if pattern == 'bullish' else '🔴 SELL'} XAU/USD (Scalping 5m)
-📍 Entry: {entry:.2f}
+            if not check_fundamentals(FMP_API_KEY):
+                print("⏸ Fundamental tidak mendukung — sinyal dibatalkan.")
+                continue
+
+            volatility = estimate_volatility(df)
+            risk = volatility * 0.3
+            rr = 3 if volatility < 2 else 2
+            sl = entry - risk if sweep == 'bullish' else entry + risk
+            tp = entry + risk * rr if sweep == 'bullish' else entry - risk * rr
+            confidence = 90 if volatility < 2 else 80
+
+            msg = f"""
+{'🟢 BUY' if sweep == 'bullish' else '🔴 SELL'} {symbol} (SMC Scalping 5m)
+📍 Entry (FVG): {entry:.2f}
 🛑 SL: {sl:.2f}
-🎯 TP: {tp:.2f}
-📊 Pattern: {pattern.title()} Engulfing + OB
+🎯 TP: {tp:.2f} (RR ~1:{rr})
+📊 Confidence: {confidence}%
+🧠 Setup: Liquidity Sweep + FVG + Market Structure + Engulfing + Trend H1
 🕐 Trend H1: {trend_h1.title()}
 🌐 Data: OANDA via TradingView
-📰 News Checked ✅
-📈 RSI: {rsi:.2f} | 📊 MACD: {macd:.2f} | Signal: {signal:.2f}
-"""
+📰 US News Checked ✅
+            """
+            send_signal(msg, df)
+            time.sleep(2)
 
-        send_signal(msg, df)
-        time.sleep(300)
+        time.sleep(60)
 
     except Exception as e:
         print("Error:", e)
