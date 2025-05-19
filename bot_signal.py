@@ -28,6 +28,14 @@ def send_signal(message, df):
     with open(chart_file, 'rb') as photo:
         bot.send_photo(CHAT_ID, photo, caption=message)
 
+def get_trend_h1():
+    df_h1 = tv.get_hist(symbol='XAUUSD', exchange='OANDA', interval=Interval.in_1_hour, n_bars=50)
+    if df_h1 is None or df_h1.empty:
+        return None
+    df_h1['ema50'] = df_h1['close'].ewm(span=50).mean()
+    trend = 'bullish' if df_h1['close'].iloc[-1] > df_h1['ema50'].iloc[-1] else 'bearish'
+    return trend
+
 def is_engulfing(df):
     last = df.iloc[-1]
     prev = df.iloc[-2]
@@ -61,59 +69,6 @@ def detect_order_block(df, bullish=True):
             )
     except:
         return False
-
-def detect_structure_change(df):
-    last_high = df['high'].iloc[-2]
-    last_low = df['low'].iloc[-2]
-    current_high = df['high'].iloc[-1]
-    current_low = df['low'].iloc[-1]
-    prev_trend = df['close'].iloc[-3] < df['close'].iloc[-2]
-    curr_trend = df['close'].iloc[-2] < df['close'].iloc[-1]
-    if prev_trend and current_low < last_low:
-        return 'CHOCH Bearish'
-    elif not prev_trend and current_high > last_high:
-        return 'CHOCH Bullish'
-    return None
-
-def detect_fvg(df):
-    fvg_zones = []
-    for i in range(2, len(df)):
-        if df['low'].iloc[i] > df['high'].iloc[i-2]:
-            fvg_zones.append(('bullish', df['high'].iloc[i-2], df['low'].iloc[i]))
-        elif df['high'].iloc[i] < df['low'].iloc[i-2]:
-            fvg_zones.append(('bearish', df['low'].iloc[i-2], df['high'].iloc[i]))
-    return fvg_zones[-1] if fvg_zones else None
-
-def detect_support_resistance(df):
-    support = []
-    resistance = []
-    closes = df['close']
-    highs = df['high']
-    lows = df['low']
-    for i in range(2, len(df)-2):
-        if lows[i] < lows[i-1] and lows[i] < lows[i+1] and lows[i+1] < lows[i+2] and lows[i-1] < lows[i-2]:
-            support.append(lows[i])
-        if highs[i] > highs[i-1] and highs[i] > highs[i+1] and highs[i+1] > highs[i+2] and highs[i-1] > highs[i-2]:
-            resistance.append(highs[i])
-    last_price = closes.iloc[-1]
-    nearest_support = min(support, key=lambda x: abs(x - last_price)) if support else None
-    nearest_resistance = min(resistance, key=lambda x: abs(x - last_price)) if resistance else None
-    return nearest_support, nearest_resistance
-
-def detect_supply_demand(df):
-    supply_zones = []
-    demand_zones = []
-    highs = df['high']
-    lows = df['low']
-    for i in range(2, len(df) - 2):
-        if highs[i] > highs[i-1] and highs[i] > highs[i+1]:
-            supply_zones.append(highs[i])
-        if lows[i] < lows[i-1] and lows[i] < lows[i+1]:
-            demand_zones.append(lows[i])
-    last_price = df['close'].iloc[-1]
-    nearest_supply = min(supply_zones, key=lambda x: abs(x - last_price)) if supply_zones else None
-    nearest_demand = min(demand_zones, key=lambda x: abs(x - last_price)) if demand_zones else None
-    return nearest_supply, nearest_demand
 
 def calculate_rsi(df, period=14):
     delta = df['close'].diff()
@@ -154,29 +109,27 @@ def check_fundamentals(api_key):
         print("Fundamental check error:", e)
         return True
 
-def calculate_confidence(structure, fvg, pattern, rsi, macd, signal):
-    score = 0
-    if structure: score += 1
-    if fvg: score += 1
-    if pattern: score += 1
-    if (pattern == 'bullish' and rsi > 50 and macd > signal) or (pattern == 'bearish' and rsi < 50 and macd < signal):
-        score += 1
-    return score
-
 while True:
     try:
+        trend_h1 = get_trend_h1()
+        if trend_h1 is None:
+            print("❌ Tidak bisa menentukan trend H1")
+            time.sleep(60)
+            continue
+
         df = tv.get_hist(symbol='XAUUSD', exchange='OANDA', interval=Interval.in_5_minute, n_bars=50)
         if df is None or df.empty:
             print("❌ Data kosong dari TradingView")
             time.sleep(60)
             continue
 
-        structure = detect_structure_change(df)
-        fvg = detect_fvg(df)
         pattern = is_engulfing(df)
+        if not pattern:
+            time.sleep(60)
+            continue
 
-        if not structure or not fvg or not pattern:
-            print("❌ Struktur/Pattern/FVG tidak valid")
+        if pattern != trend_h1:
+            print(f"📉 Sinyal {pattern} tidak searah dengan trend H1 ({trend_h1})")
             time.sleep(60)
             continue
 
@@ -196,10 +149,12 @@ while True:
 
         rsi = calculate_rsi(df)
         macd, signal = calculate_macd(df)
-
-        confidence = calculate_confidence(structure, fvg, pattern, rsi, macd, signal)
-        if confidence < 4:
-            print(f"⚠️ Confidence rendah: {confidence}/4")
+        if pattern == 'bullish' and (rsi < 50 or macd < signal):
+            print("📉 RSI atau MACD tidak mendukung bullish")
+            time.sleep(60)
+            continue
+        elif pattern == 'bearish' and (rsi > 50 or macd > signal):
+            print("📈 RSI atau MACD tidak mendukung bearish")
             time.sleep(60)
             continue
 
@@ -207,28 +162,18 @@ while True:
         sl = entry - 3 if pattern == 'bullish' else entry + 3
         tp = entry + 5 if pattern == 'bullish' else entry - 5
 
-        support, resistance = detect_support_resistance(df)
-        nearest_supply, nearest_demand = detect_supply_demand(df)
-
-        sr_info = f"\n📉 Support: {support:.2f} | 📈 Resistance: {resistance:.2f}" if support and resistance else ""
-        sd_info = f"\n🏬 Demand Zone: {nearest_demand:.2f} | 🏢 Supply Zone: {nearest_supply:.2f}" if nearest_demand and nearest_supply else ""
-        rsi_info = f"\n📈 RSI: {rsi:.2f}"
-        macd_info = f"\n📊 MACD: {macd:.2f} | Signal: {signal:.2f}"
-        fvg_info = f"\n🪟 FVG Zone: {fvg[1]:.2f} - {fvg[2]:.2f}" if fvg else ""
-        structure_info = f"\n📐 Structure: {structure}" if structure else ""
-        confidence_info = f"\n✅ Confidence: {confidence}/4"
-
         msg = (
-            f"{'🟢 BUY' if pattern == 'bullish' else '🔴 SELL'} XAU/USD (SMC Scalping 5m)\n"
+            f"{'🟢 BUY' if pattern == 'bullish' else '🔴 SELL'} XAU/USD (Scalping 5m)
+"
             f"📍 Entry: {entry:.2f}\n"
             f"🛑 SL: {sl:.2f}\n"
             f"🎯 TP: {tp:.2f}\n"
-            f"📊 Pattern: {pattern.title()} Engulfing + OB + BOS/FVG\n"
+            f"📊 Pattern: {pattern.title()} Engulfing + OB\n"
+            f"🕐 Trend H1: {trend_h1.title()}\n"
             f"🌐 Data: OANDA via TradingView\n"
-            f"📰 News Checked ✅"
-            f"{sr_info}{sd_info}{rsi_info}{macd_info}{structure_info}{fvg_info}{confidence_info}"
+            f"📰 News Checked ✅\n"
+            f"📈 RSI: {rsi:.2f} | 📊 MACD: {macd:.2f} | Signal: {signal:.2f}"
         )
-
         send_signal(msg, df)
         time.sleep(300)
 
