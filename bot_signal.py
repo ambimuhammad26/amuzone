@@ -73,7 +73,7 @@ def detect_order_block(df, bullish=True):
 def calculate_rsi(df, period=14):
     delta = df['close'].diff()
     gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
+    loss = -delta.where(delta > 0, 0)
     avg_gain = gain.rolling(window=period).mean()
     avg_loss = loss.rolling(window=period).mean()
     rs = avg_gain / avg_loss
@@ -162,18 +162,18 @@ while True:
         sl = entry - 3 if pattern == 'bullish' else entry + 3
         tp = entry + 5 if pattern == 'bullish' else entry - 5
 
-        msg = (
-            f"{'🟢 BUY' if pattern == 'bullish' else '🔴 SELL'} XAU/USD (Scalping 5m)
-"
-            f"📍 Entry: {entry:.2f}\n"
-            f"🛑 SL: {sl:.2f}\n"
-            f"🎯 TP: {tp:.2f}\n"
-            f"📊 Pattern: {pattern.title()} Engulfing + OB\n"
-            f"🕐 Trend H1: {trend_h1.title()}\n"
-            f"🌐 Data: OANDA via TradingView\n"
-            f"📰 News Checked ✅\n"
-            f"📈 RSI: {rsi:.2f} | 📊 MACD: {macd:.2f} | Signal: {signal:.2f}"
-        )
+        msg = f"""
+{'🟢 BUY' if pattern == 'bullish' else '🔴 SELL'} XAU/USD (Scalping 5m)
+📍 Entry: {entry:.2f}
+🛑 SL: {sl:.2f}
+🎯 TP: {tp:.2f}
+📊 Pattern: {pattern.title()} Engulfing + OB
+🕐 Trend H1: {trend_h1.title()}
+🌐 Data: OANDA via TradingView
+📰 News Checked ✅
+📈 RSI: {rsi:.2f} | 📊 MACD: {macd:.2f} | Signal: {signal:.2f}
+"""
+
         send_signal(msg, df)
         time.sleep(300)
 
