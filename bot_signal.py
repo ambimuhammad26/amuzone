@@ -9,13 +9,24 @@ from datetime import datetime
 # === KONFIGURASI ===
 TELEGRAM_TOKEN = '8101318218:AAFTBP-D827m3GI3QPFk7KjqIR4j6zU0g9k'
 CHAT_ID = '7248790632'
-SYMBOL = 'XAUUSD'
+SYMBOL = 'XAUUSDm'  # Disesuaikan dengan nama simbol di MT5
 MAX_SL_PIP = 50  # 50 pip = 5.0 USD untuk XAUUSD
 MAX_SL = MAX_SL_PIP * 0.1
 
 # === INIT TELEGRAM DAN MT5 ===
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 mt5.initialize()
+
+if mt5.initialize():
+    print("✅ Terhubung ke MT5")
+    if not mt5.symbol_select(SYMBOL, True):
+        print(f"❌ Gagal memilih simbol: {mt5.last_error()}")
+        exit()
+    else:
+        bot.send_message(CHAT_ID, f"🤖 Bot berhasil dijalankan untuk simbol {SYMBOL}")
+else:
+    print("❌ Gagal koneksi ke MT5")
+    exit()
 
 print("Bot scalping XAUUSD 5m dengan SMC sudah berjalan...")
 
@@ -91,19 +102,19 @@ while True:
             sl = demand
             sl_distance = entry - sl
             if sl_distance <= 0 or sl_distance > MAX_SL:
-                print(f"[X] SL BUY terlalu jauh: {sl_distance:.2f} > {MAX_SL:.2f}")
+                print(f"❌ SL BUY terlalu jauh: {sl_distance:.2f} > {MAX_SL:.2f}")
                 time.sleep(30)
                 continue
             tp = entry + sl_distance * 3
             confidence = 90
             message = f"""
-BUY {SYMBOL} (SMC 5m)
-Entry: {entry:.2f}
-SL: {sl:.2f} (Risk: {sl_distance:.2f})
-TP: {tp:.2f} (RR 1:3)
-Confidence: {confidence}%
-Trend H1: {trend.upper()}
-Confirm: Engulfing + Structure + Demand
+🟢 BUY {SYMBOL} (SMC 5m)
+📍 Entry: {entry:.2f}
+🛑 SL: {sl:.2f} (⛔ {sl_distance:.2f})
+🎯 TP: {tp:.2f} (RR 1:3)
+📊 Confidence: {confidence}%
+📈 Trend H1: {trend.upper()}
+🔎 Confirm: Engulfing + Structure + Demand
             """
             send_signal(message, df)
 
@@ -111,19 +122,19 @@ Confirm: Engulfing + Structure + Demand
             sl = supply
             sl_distance = sl - entry
             if sl_distance <= 0 or sl_distance > MAX_SL:
-                print(f"[X] SL SELL terlalu jauh: {sl_distance:.2f} > {MAX_SL:.2f}")
+                print(f"❌ SL SELL terlalu jauh: {sl_distance:.2f} > {MAX_SL:.2f}")
                 time.sleep(30)
                 continue
             tp = entry - sl_distance * 3
             confidence = 90
             message = f"""
-SELL {SYMBOL} (SMC 5m)
-Entry: {entry:.2f}
-SL: {sl:.2f} (Risk: {sl_distance:.2f})
-TP: {tp:.2f} (RR 1:3)
-Confidence: {confidence}%
-Trend H1: {trend.upper()}
-Confirm: Engulfing + Structure + Supply
+🔴 SELL {SYMBOL} (SMC 5m)
+📍 Entry: {entry:.2f}
+🛑 SL: {sl:.2f} (⛔ {sl_distance:.2f})
+🎯 TP: {tp:.2f} (RR 1:3)
+📊 Confidence: {confidence}%
+📉 Trend H1: {trend.upper()}
+🔎 Confirm: Engulfing + Structure + Supply
             """
             send_signal(message, df)
 
