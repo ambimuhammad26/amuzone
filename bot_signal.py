@@ -19,8 +19,9 @@ if not mt5.initialize():
     print("❌ Gagal inisialisasi MetaTrader5")
     exit()
 
-bot.send_message(CHAT_ID, f"✅ Bot scalping {SYMBOL} berhasil dijalankan pada {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-print("✅ Bot berhasil dijalankan dan notifikasi terkirim ke Telegram")
+print("Bot scalping XAUUSD 5m dengan SMC sudah berjalan...")
+bot.send_message(CHAT_ID, f"Ok Bot scalping {SYMBOL} berhasil dijalankan pada {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+print("Ok Bot berhasil dijalankan dan notifikasi terkirim ke Telegram")
 
 # === HELPER FUNCTION ===
 def get_candles(symbol, timeframe, n=100):
@@ -94,19 +95,19 @@ while True:
             sl = demand
             sl_distance = entry - sl
             if sl_distance <= 0 or sl_distance > MAX_SL:
-                print(f"❌ SL BUY terlalu jauh: {sl_distance:.2f} > {MAX_SL:.2f}")
+                print(f"[X] SL BUY terlalu jauh: {sl_distance:.2f} > {MAX_SL:.2f}")
                 time.sleep(30)
                 continue
             tp = entry + sl_distance * 3
             confidence = 90
             message = f"""
-🟢 BUY {SYMBOL} (SMC 5m)
-📍 Entry: {entry:.2f}
-🛑 SL: {sl:.2f} (⛔ {sl_distance:.2f})
-🎯 TP: {tp:.2f} (RR 1:3)
-📊 Confidence: {confidence}%
-📈 Trend H1: {trend.upper()}
-🔎 Confirm: Engulfing + Structure + Demand
+BUY {SYMBOL} (SMC 5m)
+Entry: {entry:.2f}
+SL: {sl:.2f} (Risk: {sl_distance:.2f})
+TP: {tp:.2f} (RR 1:3)
+Confidence: {confidence}%
+Trend H1: {trend.upper()}
+Confirm: Engulfing + Structure + Demand
             """
             send_signal(message, df)
 
@@ -114,19 +115,19 @@ while True:
             sl = supply
             sl_distance = sl - entry
             if sl_distance <= 0 or sl_distance > MAX_SL:
-                print(f"❌ SL SELL terlalu jauh: {sl_distance:.2f} > {MAX_SL:.2f}")
+                print(f"[X] SL SELL terlalu jauh: {sl_distance:.2f} > {MAX_SL:.2f}")
                 time.sleep(30)
                 continue
             tp = entry - sl_distance * 3
             confidence = 90
             message = f"""
-🔴 SELL {SYMBOL} (SMC 5m)
-📍 Entry: {entry:.2f}
-🛑 SL: {sl:.2f} (⛔ {sl_distance:.2f})
-🎯 TP: {tp:.2f} (RR 1:3)
-📊 Confidence: {confidence}%
-📉 Trend H1: {trend.upper()}
-🔎 Confirm: Engulfing + Structure + Supply
+SELL {SYMBOL} (SMC 5m)
+Entry: {entry:.2f}
+SL: {sl:.2f} (Risk: {sl_distance:.2f})
+TP: {tp:.2f} (RR 1:3)
+Confidence: {confidence}%
+Trend H1: {trend.upper()}
+Confirm: Engulfing + Structure + Supply
             """
             send_signal(message, df)
 
