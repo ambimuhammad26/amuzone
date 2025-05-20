@@ -10,12 +10,14 @@ from datetime import datetime
 TELEGRAM_TOKEN = '8101318218:AAFTBP-D827m3GI3QPFk7KjqIR4j6zU0g9k'
 CHAT_ID = '7248790632'
 SYMBOL = 'XAUUSD'
-MAX_SL_PIP = 50  # 50 pip = 5.0 USD untuk XAUUSD
-MAX_SL = MAX_SL_PIP * 0.1
+MAX_SL_PIP = 50  # 50 pip = 5.0 USD untuk XAUUSD (1 pip = 0.1 USD)
+MAX_SL = MAX_SL_PIP * 0.1  # 5.0 USD max SL
 
 # === INIT TELEGRAM DAN MT5 ===
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
-mt5.initialize()
+if not mt5.initialize():
+    print("❌ Gagal inisialisasi MetaTrader5")
+    exit()
 
 # === HELPER FUNCTION ===
 def get_candles(symbol, timeframe, n=100):
@@ -24,7 +26,16 @@ def get_candles(symbol, timeframe, n=100):
         '1h': mt5.TIMEFRAME_H1
     }
     rates = mt5.copy_rates_from_pos(symbol, tf_map[timeframe], 0, n)
+    
+    if rates is None or len(rates) == 0:
+        print(f"❌ Gagal mengambil data {symbol} timeframe {timeframe}")
+        return None
+
     df = pd.DataFrame(rates)
+    if 'time' not in df.columns:
+        print("❌ Kolom 'time' tidak ditemukan pada data")
+        return None
+    
     df['time'] = pd.to_datetime(df['time'], unit='s')
     df.set_index('time', inplace=True)
     return df
@@ -39,10 +50,14 @@ def send_signal(message, df):
 
 def get_trend_h1(symbol):
     df = get_candles(symbol, '1h', 100)
+    if df is None or df.empty:
+        return None
     df['ema50'] = df['close'].ewm(span=50).mean()
     return 'bullish' if df['close'].iloc[-1] > df['ema50'].iloc[-1] else 'bearish'
 
 def is_engulfing(df):
+    if len(df) < 2:
+        return None
     prev = df.iloc[-2]
     curr = df.iloc[-1]
     bullish = (prev['close'] < prev['open'] and curr['close'] > curr['open'] and curr['open'] < prev['close'] and curr['close'] > prev['open'])
@@ -78,7 +93,16 @@ def get_sd_zones(df):
 while True:
     try:
         df = get_candles(SYMBOL, '5m', 50)
+        if df is None or df.empty:
+            time.sleep(30)
+            continue
+
         trend = get_trend_h1(SYMBOL)
+        if trend is None:
+            print("❌ Gagal mendapatkan trend H1")
+            time.sleep(30)
+            continue
+
         engulf = is_engulfing(df)
         structure = detect_market_structure(df)
         sr_high, sr_low = get_sr_levels(df)
