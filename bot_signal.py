@@ -15,13 +15,9 @@ MAX_SL = MAX_SL_PIP * 0.1
 
 # === INIT TELEGRAM DAN MT5 ===
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
-if not mt5.initialize():
-    print("❌ Gagal inisialisasi MetaTrader5")
-    exit()
+mt5.initialize()
 
 print("Bot scalping XAUUSD 5m dengan SMC sudah berjalan...")
-bot.send_message(CHAT_ID, f"Ok Bot scalping {SYMBOL} berhasil dijalankan pada {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-print("Ok Bot berhasil dijalankan dan notifikasi terkirim ke Telegram")
 
 # === HELPER FUNCTION ===
 def get_candles(symbol, timeframe, n=100):
