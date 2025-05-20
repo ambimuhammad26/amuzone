@@ -6,148 +6,124 @@ import matplotlib.pyplot as plt
 import mplfinance as mpf
 from datetime import datetime
 
-# =================== KONFIGURASI =================== #
-PAIRS = ['XAUUSD', 'EURUSD', 'GBPJPY']
-API_TOKEN = '8101318218:AAFTBP-D827m3GI3QPFk7KjqIR4j6zU0g9k'
+# === KONFIGURASI ===
+TELEGRAM_TOKEN = '8101318218:AAFTBP-D827m3GI3QPFk7KjqIR4j6zU0g9k'
 CHAT_ID = '7248790632'
-bot = telebot.TeleBot(API_TOKEN)
+SYMBOL = 'XAUUSD'
+MAX_SL_PIP = 50  # 50 pip = 5.0 USD untuk XAUUSD
+MAX_SL = MAX_SL_PIP * 0.1
 
-# Inisialisasi koneksi MT5
-if not mt5.initialize():
-    print("❌ Gagal terhubung ke MetaTrader5")
-    quit()
+# === INIT TELEGRAM DAN MT5 ===
+bot = telebot.TeleBot(TELEGRAM_TOKEN)
+mt5.initialize()
 
-# =================== HELPER FUNCTIONS =================== #
-def get_mt5_data(symbol, timeframe, bars=100):
-    rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, bars)
-    if rates is None or len(rates) == 0:
-        return None
+# === HELPER FUNCTION ===
+def get_candles(symbol, timeframe, n=100):
+    tf_map = {
+        '5m': mt5.TIMEFRAME_M5,
+        '1h': mt5.TIMEFRAME_H1
+    }
+    rates = mt5.copy_rates_from_pos(symbol, tf_map[timeframe], 0, n)
     df = pd.DataFrame(rates)
-    df['datetime'] = pd.to_datetime(df['time'], unit='s')
-    return df[['datetime', 'open', 'high', 'low', 'close', 'tick_volume']]
+    df['time'] = pd.to_datetime(df['time'], unit='s')
+    df.set_index('time', inplace=True)
+    return df
 
 def send_signal(message, df):
-    print("Kirim sinyal:", message)
-    df_plot = df[['datetime', 'open', 'high', 'low', 'close']].copy()
-    df_plot.set_index('datetime', inplace=True)
+    df_plot = df[['open', 'high', 'low', 'close']].copy()
     df_plot.columns = ['Open', 'High', 'Low', 'Close']
-    chart_file = '/tmp/chart.png'
-    mpf.plot(df_plot[-50:], type='candle', style='charles', volume=False, savefig=chart_file)
-    with open(chart_file, 'rb') as photo:
-        bot.send_photo(CHAT_ID, photo, caption=message)
+    chart_path = '/tmp/chart.png'
+    mpf.plot(df_plot[-50:], type='candle', style='charles', volume=False, savefig=chart_path)
+    with open(chart_path, 'rb') as chart:
+        bot.send_photo(CHAT_ID, chart, caption=message)
 
 def get_trend_h1(symbol):
-    df = get_mt5_data(symbol, mt5.TIMEFRAME_H1, 100)
-    if df is None:
-        return None
+    df = get_candles(symbol, '1h', 100)
     df['ema50'] = df['close'].ewm(span=50).mean()
     return 'bullish' if df['close'].iloc[-1] > df['ema50'].iloc[-1] else 'bearish'
 
-def detect_liquidity_sweep(df):
-    high_sweep = df['high'].iloc[-1] > df['high'].iloc[-2] and df['close'].iloc[-1] < df['open'].iloc[-1]
-    low_sweep = df['low'].iloc[-1] < df['low'].iloc[-2] and df['close'].iloc[-1] > df['open'].iloc[-1]
-    return 'bearish' if high_sweep else 'bullish' if low_sweep else None
-
-def detect_fvg(df):
-    try:
-        fvg_up = df['low'].iloc[-3] > df['high'].iloc[-1]
-        fvg_down = df['high'].iloc[-3] < df['low'].iloc[-1]
-        if fvg_up:
-            return (True, df['low'].iloc[-3])
-        elif fvg_down:
-            return (True, df['high'].iloc[-3])
-        else:
-            return (False, None)
-    except:
-        return (False, None)
-
-def estimate_volatility(df):
-    return df['high'].rolling(10).max().iloc[-1] - df['low'].rolling(10).min().iloc[-1]
+def is_engulfing(df):
+    prev = df.iloc[-2]
+    curr = df.iloc[-1]
+    bullish = (prev['close'] < prev['open'] and curr['close'] > curr['open'] and curr['open'] < prev['close'] and curr['close'] > prev['open'])
+    bearish = (prev['close'] > prev['open'] and curr['close'] < curr['open'] and curr['open'] > prev['close'] and curr['close'] < prev['open'])
+    return 'bullish' if bullish else 'bearish' if bearish else None
 
 def detect_market_structure(df):
-    last_highs = df['high'].rolling(3).max()
-    last_lows = df['low'].rolling(3).min()
-    higher_high = last_highs.iloc[-1] > last_highs.iloc[-2]
-    higher_low = last_lows.iloc[-1] > last_lows.iloc[-2]
-    lower_high = last_highs.iloc[-1] < last_highs.iloc[-2]
-    lower_low = last_lows.iloc[-1] < last_lows.iloc[-2]
-    if higher_high and higher_low:
+    highs = df['high'].rolling(3).max()
+    lows = df['low'].rolling(3).min()
+    hh = highs.iloc[-1] > highs.iloc[-2]
+    hl = lows.iloc[-1] > lows.iloc[-2]
+    lh = highs.iloc[-1] < highs.iloc[-2]
+    ll = lows.iloc[-1] < lows.iloc[-2]
+    if hh and hl:
         return 'bullish'
-    elif lower_high and lower_low:
+    elif lh and ll:
         return 'bearish'
     else:
         return 'ranging'
 
-def is_engulfing(df):
-    if len(df) < 2:
-        return None
-    prev = df.iloc[-2]
-    last = df.iloc[-1]
-    bullish = prev['close'] < prev['open'] and last['close'] > last['open'] and last['open'] < prev['close'] and last['close'] > prev['open']
-    bearish = prev['close'] > prev['open'] and last['close'] < last['open'] and last['open'] > prev['close'] and last['close'] < prev['open']
-    return 'bullish' if bullish else 'bearish' if bearish else None
+def get_sr_levels(df):
+    high = df['high'].rolling(20).max().iloc[-1]
+    low = df['low'].rolling(20).min().iloc[-1]
+    return high, low
 
-def is_trading_hours():
-    now = datetime.now().time()
-    return 8 <= now.hour <= 22
+def get_sd_zones(df):
+    # Kasar: gunakan swing high / low terakhir sebagai supply & demand
+    supply = df['high'].iloc[-3]
+    demand = df['low'].iloc[-3]
+    return supply, demand
 
-# =================== MAIN LOOP =================== #
+# === MAIN LOOP ===
 while True:
     try:
-        if not is_trading_hours():
-            print("⏸ Di luar jam trading (08:00–22:00 WIB)")
-            time.sleep(60)
-            continue
+        df = get_candles(SYMBOL, '5m', 50)
+        trend = get_trend_h1(SYMBOL)
+        engulf = is_engulfing(df)
+        structure = detect_market_structure(df)
+        sr_high, sr_low = get_sr_levels(df)
+        supply, demand = get_sd_zones(df)
+        entry = df['close'].iloc[-1]
 
-        for symbol in PAIRS:
-            trend_h1 = get_trend_h1(symbol)
-            if trend_h1 is None:
-                print(f"❌ Tidak bisa dapatkan trend H1 untuk {symbol}")
+        if trend == 'bullish' and engulf == 'bullish' and structure == 'bullish':
+            sl = demand
+            sl_distance = entry - sl
+            if sl_distance <= 0 or sl_distance > MAX_SL:
+                print(f"❌ SL BUY terlalu jauh: {sl_distance:.2f} > {MAX_SL:.2f}")
+                time.sleep(30)
                 continue
-
-            df = get_mt5_data(symbol, mt5.TIMEFRAME_M5, 50)
-            if df is None or df.empty:
-                print(f"❌ Data kosong dari MT5 untuk {symbol}")
-                continue
-
-            sweep = detect_liquidity_sweep(df)
-            if sweep != trend_h1:
-                continue
-
-            market_structure = detect_market_structure(df)
-            if market_structure != trend_h1:
-                continue
-
-            engulfing = is_engulfing(df)
-            if engulfing != sweep:
-                continue
-
-            fvg_ok, entry = detect_fvg(df)
-            if not fvg_ok or entry is None:
-                continue
-
-            if not (df['low'].iloc[-1] <= entry <= df['high'].iloc[-1]):
-                continue
-
-            volatility = estimate_volatility(df)
-            risk = volatility * 0.3
-            rr = 3 if volatility < 2 else 2
-            sl = entry - risk if sweep == 'bullish' else entry + risk
-            tp = entry + risk * rr if sweep == 'bullish' else entry - risk * rr
-            confidence = 90 if volatility < 2 else 80
-
-            msg = f"""
-{'🟢 BUY' if sweep == 'bullish' else '🔴 SELL'} {symbol} (SMC Scalping 5m)
-📍 Entry (FVG): {entry:.2f}
-🛑 SL: {sl:.2f}
-🎯 TP: {tp:.2f} (RR ~1:{rr})
+            tp = entry + sl_distance * 3
+            confidence = 90
+            message = f"""
+🟢 BUY {SYMBOL} (SMC 5m)
+📍 Entry: {entry:.2f}
+🛑 SL: {sl:.2f} (⛔ {sl_distance:.2f})
+🎯 TP: {tp:.2f} (RR 1:3)
 📊 Confidence: {confidence}%
-🧠 Setup: Liquidity Sweep + FVG + Market Structure + Engulfing + Trend H1
-🕐 Trend H1: {trend_h1.title()}
-📡 Data: MT5 (Exness)
+📈 Trend H1: {trend.upper()}
+🔎 Confirm: Engulfing + Structure + Demand
             """
-            send_signal(msg, df)
-            time.sleep(2)
+            send_signal(message, df)
+
+        elif trend == 'bearish' and engulf == 'bearish' and structure == 'bearish':
+            sl = supply
+            sl_distance = sl - entry
+            if sl_distance <= 0 or sl_distance > MAX_SL:
+                print(f"❌ SL SELL terlalu jauh: {sl_distance:.2f} > {MAX_SL:.2f}")
+                time.sleep(30)
+                continue
+            tp = entry - sl_distance * 3
+            confidence = 90
+            message = f"""
+🔴 SELL {SYMBOL} (SMC 5m)
+📍 Entry: {entry:.2f}
+🛑 SL: {sl:.2f} (⛔ {sl_distance:.2f})
+🎯 TP: {tp:.2f} (RR 1:3)
+📊 Confidence: {confidence}%
+📉 Trend H1: {trend.upper()}
+🔎 Confirm: Engulfing + Structure + Supply
+            """
+            send_signal(message, df)
 
         time.sleep(60)
 
